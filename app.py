@@ -4,7 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents.agent_types import AgentType
+from langchain.agents import AgentType
 import io
 
 # 1. CONFIGURATION
