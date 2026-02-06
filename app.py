@@ -1,21 +1,17 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentType
 import io
 
 # 1. CONFIGURATION
 st.set_page_config(page_title="Gemini Data Analyst", page_icon="📊", layout="wide")
 
-# 2. API KEY HANDLING (The "Handshake")
+# 2. API KEY HANDLING
 def get_api_key():
-    # Priority 1: Check Streamlit Secrets (for the owner)
     if "GOOGLE_API_KEY" in st.secrets:
         return st.secrets["GOOGLE_API_KEY"]
-    # Priority 2: Ask the user (for visitors)
     return st.sidebar.text_input("Gemini API Key", type="password", help="Enter your Google AI Studio Key")
 
 # 3. SETUP SESSION STATE
@@ -25,7 +21,7 @@ if "df" not in st.session_state: st.session_state.df = None
 # 4. SIDEBAR LOGIC
 with st.sidebar:
     st.title("🤖 Config")
-    api_key = get_api_key() # Calls our secure function
+    api_key = get_api_key()
     
     st.markdown("---")
     uploaded_file = st.file_uploader("Upload Data", type=["csv", "xlsx"])
@@ -41,11 +37,22 @@ def load_data(file):
     try:
         return pd.read_csv(file) if file.name.endswith(".csv") else pd.read_excel(file)
     except Exception as e:
+        st.error(f"Error loading file: {e}")
         return None
 
 def get_agent(df, key):
+    # We use Gemini 1.5 Flash (it's fast and free-tier friendly)
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=key, temperature=0)
-    return create_pandas_dataframe_agent(llm, df, verbose=True, allow_dangerous_code=True, handle_parsing_errors=True)
+    
+    # We REMOVED the 'agent_type' argument. 
+    # This allows it to use the default 'zero-shot-react-description' mode which works best for Gemini.
+    return create_pandas_dataframe_agent(
+        llm, 
+        df, 
+        verbose=True, 
+        allow_dangerous_code=True, 
+        handle_parsing_errors=True
+    )
 
 # 6. MAIN INTERFACE
 st.title("Gemini Data Analyst 🚀")
@@ -55,45 +62,50 @@ if uploaded_file:
         st.session_state.df = load_data(uploaded_file)
     df = st.session_state.df
 
-    with st.expander("🔎 Data Preview"):
-        st.dataframe(df.head(5), use_container_width=True)
+    if df is not None:
+        with st.expander("🔎 Data Preview"):
+            st.dataframe(df.head(5), use_container_width=True)
 
-    # Chat Logic
-    if api_key:
-        try:
-            agent = get_agent(df, api_key)
-            
-            for msg in st.session_state.messages:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-                    if "fig" in msg: st.plotly_chart(msg["fig"])
+        # Chat Logic
+        if api_key:
+            try:
+                agent = get_agent(df, api_key)
+                
+                for msg in st.session_state.messages:
+                    with st.chat_message(msg["role"]):
+                        st.markdown(msg["content"])
+                        if "fig" in msg: st.plotly_chart(msg["fig"])
 
-            if prompt := st.chat_input("Ask about your data..."):
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"): st.markdown(prompt)
+                if prompt := st.chat_input("Ask about your data..."):
+                    st.session_state.messages.append({"role": "user", "content": prompt})
+                    with st.chat_message("user"): st.markdown(prompt)
 
-                with st.chat_message("assistant"):
-                    with st.spinner("Thinking..."):
-                        if any(w in prompt.lower() for w in ["plot", "chart", "graph"]):
-                            # Graph Logic
-                            code_prompt = f"Write python code using plotly.express to visualize: '{prompt}'. Save the figure to variable 'fig'. Return ONLY code."
-                            resp = agent.run(code_prompt)
-                            cleaned_code = resp.replace("```python", "").replace("```", "").strip()
-                            
-                            local_vars = {"df": df, "px": px}
-                            exec(cleaned_code, globals(), local_vars)
-                            fig = local_vars.get("fig")
-                            
-                            st.plotly_chart(fig)
-                            st.session_state.messages.append({"role": "assistant", "content": "Here is your chart.", "fig": fig})
-                        else:
-                            # Text Logic
-                            response = agent.run(prompt)
-                            st.markdown(response)
-                            st.session_state.messages.append({"role": "assistant", "content": response})
-        except Exception as e:
-            st.error(f"Error: {e}. Please check your API Key.")
-    else:
-        st.warning("Please enter an API Key in the sidebar to start chatting.")
+                    with st.chat_message("assistant"):
+                        with st.spinner("Thinking..."):
+                            if any(w in prompt.lower() for w in ["plot", "chart", "graph"]):
+                                # Graph Logic
+                                code_prompt = f"Write python code using plotly.express to visualize: '{prompt}'. Save the figure to variable 'fig'. Return ONLY code."
+                                resp = agent.run(code_prompt)
+                                cleaned_code = resp.replace("```python", "").replace("```", "").strip()
+                                
+                                local_vars = {"df": df, "px": px}
+                                # Execute the code generated by AI
+                                exec(cleaned_code, globals(), local_vars)
+                                fig = local_vars.get("fig")
+                                
+                                if fig:
+                                    st.plotly_chart(fig)
+                                    st.session_state.messages.append({"role": "assistant", "content": "Here is your chart.", "fig": fig})
+                                else:
+                                    st.error("I couldn't generate the chart. Please try again.")
+                            else:
+                                # Text Logic
+                                response = agent.run(prompt)
+                                st.markdown(response)
+                                st.session_state.messages.append({"role": "assistant", "content": response})
+            except Exception as e:
+                st.error(f"Error: {e}. Please check your API Key.")
+        else:
+            st.warning("Please enter an API Key in the sidebar to start chatting.")
 else:
     st.info("Please upload a CSV file to begin.")
